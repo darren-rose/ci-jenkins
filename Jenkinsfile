@@ -1,0 +1,53 @@
+#!/usr/bin/env groovy
+
+node('maven') {
+
+    def mvnHome
+    def pom
+    def version
+    def branchName
+    def releaseBranch = "master"
+
+    // Mark the code checkout 'stage'....
+    stage('Preparation') {
+        // Checkout code from repository
+        checkout scm
+
+        // Get the maven tool.
+        mvnHome = tool 'M3'
+
+        // Add MVN to the path
+        env.PATH = "${mvnHome}/bin:${env.PATH}"
+
+        // Read the branch name from git
+        sh 'git branch -a --contains $(git rev-parse --short HEAD) --merged > branchName'
+        branchName = readFile('branchName').trim()
+        println "Releasing from branch: $branchName"
+
+        // Read the POM file and extract the versionNumber
+        pom = readMavenPom file: 'pom.xml'
+        version = branchName.contains(releaseBranch) ? pom.version : "${pom.version}.${currentBuild.number}"
+        println "The artefact version will be: $version"
+    }
+
+    // Mark the code build 'stage'....
+    stage('Build Artefact') {
+        // Retrieve the global settings.xml
+        configFileProvider([configFile(fileId: 'mvn-settings', variable: 'MAVEN_SETTINGS')]) {
+            // Set the artefact version
+            sh "mvn  -s $MAVEN_SETTINGS -P cicd -U versions:set -DnewVersion=${version}"
+
+            // Build
+            sh "mvn -s $MAVEN_SETTINGS -P cicd -U clean install"
+        }
+    }
+
+    // Mark the code deploy 'stage'....
+    stage('Deploy to Nexus') {
+        // Retrieve the global settings.xml
+        configFileProvider([configFile(fileId: 'mvn-settings', variable: 'MAVEN_SETTINGS')]) {
+            // Deploy to artefacts repository
+            sh "mvn -s $MAVEN_SETTINGS -P cicd -U -Dmaven.test.skip=true deploy"
+        }
+    }
+}
